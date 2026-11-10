@@ -5,6 +5,12 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM nginx:1.29-alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production PORT=3000
+COPY package*.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY --from=build /app/dist ./dist
+COPY server.mjs ./server.mjs
+EXPOSE 3000
+CMD ["node", "server.mjs"]

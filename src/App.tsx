@@ -6,6 +6,8 @@ import {
   Paperclip, PhoneCall, Plus, QrCode, Search, Send, Settings2, Share2, Shield,
   ShieldAlert, ShieldCheck, Smartphone, Sparkles, Upload, UserPlus, Users, Video, X, Zap
 } from 'lucide-react'
+import Login from './pages/Login'
+import PasskeySettings from './pages/PasskeySettings'
 
 type Tab = 'home' | 'bot' | 'check' | 'guard' | 'cases' | 'network' | 'settings'
 type ChatMessage = { from: 'user' | 'bot'; text: string; risk?: 'risk' | 'safe' | 'review' }
@@ -38,7 +40,7 @@ function downloadFile(name: string, content: string, type = 'text/plain') {
   URL.revokeObjectURL(url)
 }
 
-function App() {
+function Workspace() {
   const [tab, setTab] = useState<Tab>('home')
   const [checkType, setCheckType] = useState<CheckType>('Link')
   const [input, setInput] = useState(sampleText.Link)
@@ -471,6 +473,8 @@ function SettingsScreen({ autoHold, setAutoHold, regionalAlerts, setRegionalAler
     <section className="settings-group"><div className="section-heading"><h3>Team access</h3><button className="text-button" onClick={onAdd}><Plus size={16} />Invite</button></div>{team.map((member: string) => <div className="team-row" key={member}><span>{member.charAt(0).toUpperCase()}</span><p>{member}</p>{member.includes('Invited') ? <small>Pending</small> : <CheckCircle2 size={17} />}</div>)}</section>
     <section className="settings-group action-list"><h3>Business controls</h3><button onClick={onPermissions}><LockKeyhole size={19} /><span><strong>Message access & permissions</strong><small>Forward-only, notification previews and evidence consent</small></span><ChevronRight size={18} /></button><button onClick={onChannels}><MessageSquareText size={19} /><span><strong>Messaging channels</strong><small>WhatsApp and Telegram integration design</small></span><ChevronRight size={18} /></button><button onClick={onApi}><Activity size={19} /><span><strong>Risk Check API</strong><small>View integration request</small></span><ChevronRight size={18} /></button><button onClick={onExport}><Download size={19} /><span><strong>Export workspace data</strong><small>Cases, people and policy settings</small></span><ChevronRight size={18} /></button><button onClick={onInstall}><Upload size={19} /><span><strong>Install mobile app</strong><small>Add this prototype to your home screen</small></span><ChevronRight size={18} /></button><button onClick={onHelp}><CircleHelp size={19} /><span><strong>Prototype guide</strong><small>What is functional and what is simulated</small></span><ChevronRight size={18} /></button></section>
     <div className="security-footer"><ShieldCheck size={18} /><p><strong>Privacy by design</strong><span>No payment PIN, OTP or full account number should ever be collected.</span></p></div>
+    <p><a href="/security">Set up fingerprint or device passcode sign-in</a></p>
+    <button onClick={async () => { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); window.location.assign('/login') }}>Sign out</button>
   </>
 }
 
@@ -486,6 +490,19 @@ function Modal({ onClose, title, eyebrow, children }: { onClose: () => void; tit
   const panelRef = useRef<HTMLDivElement>(null)
   useEffect(() => { panelRef.current?.focus() }, [])
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabIndex={-1} ref={panelRef}><button className="modal-close" onClick={onClose} aria-label="Close dialog"><X size={20} /></button><p className="eyebrow">{eyebrow}</p><h2 id="modal-title">{title}</h2>{children}</div></div>
+}
+
+function App() {
+  const [signedIn, setSignedIn] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (window.location.pathname === '/login') return
+    void fetch('/api/auth/me', { credentials: 'same-origin' }).then(response => setSignedIn(response.ok)).catch(() => setSignedIn(false))
+  }, [])
+  if (window.location.pathname === '/login') return <Login />
+  if (signedIn === null) return <div role="status" className="p-6">Checking your session…</div>
+  if (!signedIn) { window.location.replace('/login'); return <div role="status" className="p-6">Opening sign-in…</div> }
+  if (window.location.pathname === '/security') return <PasskeySettings />
+  return <Workspace />
 }
 
 export default App
