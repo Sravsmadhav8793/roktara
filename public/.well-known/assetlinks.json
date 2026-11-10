@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.sravantix.roktara",
+      "sha256_cert_fingerprints": [
+        "77:33:F6:57:2F:49:83:54:07:87:88:13:1C:26:3F:02:B5:BC:79:A9:70:14:A6:7E:C6:BB:FF:E5:78:10:AB:04"
+      ]
+    }
+  }
+]

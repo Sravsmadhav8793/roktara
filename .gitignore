@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
+release-secrets/

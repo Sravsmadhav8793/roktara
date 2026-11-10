@@ -170,9 +170,12 @@ app.post('/api/passkey/remove', bodyLimit({ maxSize: 4096 }), async c => {
 });
 
 app.get('/assets/*', serveStatic({ root: './dist' }));
+app.get('/.well-known/assetlinks.json', serveStatic({ root: './dist' }));
 app.get('/icons/*', serveStatic({ root: './dist' }));
 app.get('/manifest.webmanifest', serveStatic({ root: './dist' }));
 app.get('/sw.js', serveStatic({ root: './dist' }));
+app.get('/privacy.html', serveStatic({ root: './dist' }));
+app.get('/delete-account.html', serveStatic({ root: './dist' }));
 app.get('/*', async c => {
   if (c.req.path !== '/login' && !await hasSession(c)) return c.redirect('/login');
   return c.html(indexHtml);
