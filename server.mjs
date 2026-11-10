@@ -19,6 +19,10 @@ const origin = required('APP_ORIGIN');
 const rpID = new URL(origin).hostname;
 const email = required('ADMIN_EMAIL').toLowerCase();
 const passwordHash = required('ADMIN_PASSWORD_SCRYPT');
+const reviewerEmail = (process.env.REVIEW_EMAIL || '').toLowerCase();
+const reviewerPasswordHash = process.env.REVIEW_PASSWORD_SCRYPT || '';
+if (Boolean(reviewerEmail) !== Boolean(reviewerPasswordHash)) throw new Error('Review email and password hash must be configured together');
+if (reviewerEmail && reviewerEmail === email) throw new Error('Review account must differ from owner account');
 const secret = new TextEncoder().encode(required('APP_SECRET'));
 const googleClientId = process.env.GOOGLE_CLIENT_ID || '';
 const googleKeys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
@@ -37,19 +41,29 @@ function cookieOptions(c, maxAge) {
 function validOrigin(c) {
   return c.req.header('origin') === origin && c.req.header('host') === new URL(origin).host;
 }
-async function issueSession(c) {
+async function issueSession(c, account = email) {
   const token = await new SignJWT({}).setProtectedHeader({ alg: 'HS256' })
-    .setSubject(`local:${email}`).setIssuedAt().setExpirationTime('12h').sign(secret);
+    .setSubject(`local:${account}`).setIssuedAt().setExpirationTime('12h').sign(secret);
   setCookie(c, 'roktara_session', token, cookieOptions(c, 12 * 3600));
   return c.json({ success: true });
 }
-async function hasSession(c) {
+async function sessionRole(c) {
   const token = getCookie(c, 'roktara_session');
-  if (!token) return false;
+  if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret, { algorithms: ['HS256'] });
-    return payload.sub === `local:${email}`;
-  } catch { return false; }
+    if (payload.sub === `local:${email}`) return 'owner';
+    if (reviewerEmail && payload.sub === `local:${reviewerEmail}`) return 'reviewer';
+    return null;
+  } catch { return null; }
+}
+async function hasSession(c) { return Boolean(await sessionRole(c)); }
+async function hasOwnerSession(c) { return (await sessionRole(c)) === 'owner'; }
+function matchesPassword(candidate, configuredHash) {
+  const [salt, expectedHex] = configuredHash.split(':');
+  const expected = /^[a-f0-9]{128}$/i.test(expectedHex || '') ? Buffer.from(expectedHex, 'hex') : Buffer.alloc(64);
+  const actual = scryptSync(typeof candidate === 'string' ? candidate : '', salt || 'invalid', 64);
+  return timingSafeEqual(actual, expected);
 }
 async function remember(c, name, kind, challenge) {
   const token = await new SignJWT({ kind, challenge }).setProtectedHeader({ alg: 'HS256' })
@@ -67,7 +81,10 @@ async function consume(c, name, kind) {
 }
 function rows() { return db.prepare('SELECT * FROM passkey_credentials').all(); }
 
-app.get('/api/auth/me', async c => (await hasSession(c)) ? c.json({ email }) : c.json({ error: 'Sign in required' }, 401));
+app.get('/api/auth/me', async c => {
+  const role = await sessionRole(c);
+  return role ? c.json({ email: role === 'owner' ? email : reviewerEmail }) : c.json({ error: 'Sign in required' }, 401);
+});
 app.post('/api/logout', c => { deleteCookie(c, 'roktara_session', { path: '/' }); return c.json({ success: true }); });
 app.post('/api/login', bodyLimit({ maxSize: 4096 }), async c => {
   if (!validOrigin(c)) return c.json({ error: 'Invalid origin' }, 403);
@@ -77,12 +94,12 @@ app.post('/api/login', bodyLimit({ maxSize: 4096 }), async c => {
   if (attempt && attempt.until > now && attempt.count >= 5) return c.json({ error: 'Too many attempts. Try again later.' }, 429);
   try {
     const body = await c.req.json();
-    const [salt, expectedHex] = passwordHash.split(':');
-    const expected = /^[a-f0-9]{128}$/i.test(expectedHex || '') ? Buffer.from(expectedHex, 'hex') : Buffer.alloc(64);
-    const actual = scryptSync(typeof body.password === 'string' ? body.password : '', salt || 'invalid', 64);
-    if (body.email?.toLowerCase() !== email || !timingSafeEqual(actual, expected)) throw new Error('Invalid password');
+    const account = typeof body.email === 'string' ? body.email.toLowerCase() : '';
+    const ownerValid = matchesPassword(body.password, passwordHash) && account === email;
+    const reviewerValid = reviewerEmail && matchesPassword(body.password, reviewerPasswordHash) && account === reviewerEmail;
+    if (!ownerValid && !reviewerValid) throw new Error('Invalid password');
     attempts.delete(address);
-    return issueSession(c);
+    return issueSession(c, reviewerValid ? reviewerEmail : email);
   } catch {
     attempts.set(address, { count: (attempt?.until > now ? attempt.count : 0) + 1, until: now + 15 * 60_000 });
     return c.json({ error: 'Invalid email or password' }, 401);
@@ -109,12 +126,12 @@ app.post('/api/signin/google', bodyLimit({ maxSize: 8192 }), async c => {
 });
 
 app.get('/api/passkey/list', async c => {
-  if (!await hasSession(c)) return c.json({ error: 'Sign in required' }, 401);
+  if (!await hasOwnerSession(c)) return c.json({ error: 'Owner account required' }, 403);
   return c.json({ passkeys: rows().map(row => ({ id: row.id, createdAt: row.created_at, lastUsedAt: row.last_used_at })) });
 });
 app.post('/api/passkey/register/options', async c => {
   if (!validOrigin(c)) return c.json({ error: 'Invalid origin' }, 403);
-  if (!await hasSession(c)) return c.json({ error: 'Sign in required' }, 401);
+  if (!await hasOwnerSession(c)) return c.json({ error: 'Owner account required' }, 403);
   const options = await generateRegistrationOptions({
     rpName: 'Roktara', rpID, userName: email, userID: new TextEncoder().encode(`local:${email}`),
     attestationType: 'none', excludeCredentials: rows().map(row => ({ id: row.id })),
@@ -125,7 +142,7 @@ app.post('/api/passkey/register/options', async c => {
 });
 app.post('/api/passkey/register/verify', bodyLimit({ maxSize: 65536 }), async c => {
   if (!validOrigin(c)) return c.json({ error: 'Invalid origin' }, 403);
-  if (!await hasSession(c)) return c.json({ error: 'Sign in required' }, 401);
+  if (!await hasOwnerSession(c)) return c.json({ error: 'Owner account required' }, 403);
   try {
     const challenge = await consume(c, 'private_passkey_challenge', 'register');
     const response = await c.req.json();
@@ -162,7 +179,7 @@ app.post('/api/passkey/login/verify', bodyLimit({ maxSize: 65536 }), async c => 
 });
 app.post('/api/passkey/remove', bodyLimit({ maxSize: 4096 }), async c => {
   if (!validOrigin(c)) return c.json({ error: 'Invalid origin' }, 403);
-  if (!await hasSession(c)) return c.json({ error: 'Sign in required' }, 401);
+  if (!await hasOwnerSession(c)) return c.json({ error: 'Owner account required' }, 403);
   const body = await c.req.json().catch(() => ({}));
   if (typeof body.id !== 'string' || body.id.length > 255) return c.json({ error: 'Invalid passkey' }, 400);
   db.prepare('DELETE FROM passkey_credentials WHERE id = ?').run(body.id);
